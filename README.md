@@ -1,216 +1,216 @@
-# Parking Reservation Chatbot — Stage 1 (RAG Chatbot)
+# Parking Reservation Chatbot — Stage 2: Human Approval
 
-A RAG-based parking assistant that answers questions about parking info,
-hours, prices, availability, and location, and collects reservation
-details (name, surname, car number, reservation period) through
-conversation.
+A conversational parking assistant that combines the Stage 1 RAG knowledge
+base and reservation flow with a LangChain-powered administrator agent.
+After collecting the user's reservation details, the chatbot creates a
+pending request, notifies the administrator, and reports the administrator's
+approval or refusal when the user checks the request status.
 
-## Architecture
+## Stage 2 Workflow
 
-```
-PDFs (data/pdfs/*.pdf)
-   │  PyPDFLoader (per-page) → merge into full doc text + page-offset map
-   ▼
-SemanticChunker (meaning-based splits; falls back to
-RecursiveCharacterTextSplitter if unavailable)
-   │
-   ├──► metadata DB (SQLite: source_documents, document_chunks)  ← source of truth
-   │
-   ▼
-Vector DB (Milvus, auto-fallback to Chroma)
-   │
-   ▼
-RagChain: intent classification → static_info (vector search) |
-          dynamic_info (SQL: hours/prices/availability) | reservation
-   │
-   ▼
-ParkingChatbot: PII guardrail (Presidio) on input + output,
-                reservation slot-filling, logging
+```text
+User
+ │ asks to reserve
+ ▼
+ParkingChatbot (Stage 1)
+ │ collects name, car number, dates/times, optional parking lot
+ ▼
+AdminAgent.escalate()
+ │ writes PENDING request and sends notification
+ ▼
+Shared SQLite request store (data/admin_requests.db)
+ │                                 ▲
+ │                         administrator decides
+ │                         LangChain CLI or REST API
+ ▼                                 │
+ParkingChatbot polls request status and tells the user
 ```
 
-Static knowledge (general info, location, booking process, policies) comes
-from PDFs. Dynamic data (live hours/prices/availability) comes from a
-separate SQLite table (`src/sql_db.py`), reflecting the optional
-static/dynamic split from the spec.
+The two agents coordinate through the same SQLite-backed request store.
+Notifications can be sent to the console, email, Slack, or an external REST
+endpoint. The administrator records the actual decision using the
+LangChain-powered admin CLI or the Admin REST API; email and Slack are
+notification channels, not reply-processing channels.
 
-## Project structure
+## Features
 
-```
-parking-chatbot/
-├── src/
-│   ├── config.py              # centralized settings (env vars)
-│   ├── sql_db.py              # dynamic data: hours, prices, availability
-│   ├── vector_store.py        # Milvus/Chroma build + load helpers
-│   ├── pdf_loader.py          # PDF page loading + merging
-│   ├── semantic_chunker.py    # meaning-based chunking
-│   ├── metadata_store.py      # chunk/document metadata DB (source of truth)
-│   ├── reservation.py         # reservation slot-filling agent
-│   ├── rag_chain.py           # intent classification + grounded answers
-│   ├── chatbot.py             # orchestrator (ties everything together)
-│   └── guardrails/pii_filter.py  # PII detection/redaction
-├── data/
-│   ├── pdfs/                  # knowledge base PDFs go here
-│   ├── generate_sample_pdfs.py
-│   └── ingest.py              # PDF -> chunks -> metadata DB -> vector DB
-├── evaluation/
-│   ├── generate_qa_from_pdfs.py  # auto-generates real test questions
-│   └── evaluate.py               # Recall@K, Precision@K, latency, accuracy
-├── tests/                     # pytest, fully offline, 2+ tests per module
-├── terraform/                 # IaC: Milvus + app via Docker provider
-├── docs/                      # presentation generator
-├── .github/workflows/ci.yml   # CI: lint + test + docker build
-├── docker-compose.yml         # local Milvus stack
-├── Dockerfile
-└── main.py                    # CLI entry point
+- Answers static parking questions from ingested PDFs using retrieval-augmented
+  generation, and dynamic hours, prices, and availability questions from SQLite.
+- Collects reservation details through conversational slot filling.
+- Escalates completed reservations to the administrator with a generated
+  summary and unique request ID.
+- Supports pending, approved, and refused decisions, including an optional
+  administrator reason.
+- Lets administrators manage requests in natural language with LangChain tools
+  or through a REST API.
+- Applies PII scanning/redaction to protect user information in chat.
+
+## Project Structure
+
+```text
+admin_agent/
+  agent.py       LangChain admin agent, escalation, and approval tools
+  api.py         FastAPI endpoints for requests and decisions
+  cli.py         Interactive natural-language admin console
+  models.py      Shared reservation request/status model
+  notifier.py    Console, SMTP email, Slack webhook, and REST notifications
+  store.py       Shared SQLite request store
+src/
+  chatbot.py     User-facing assistant and Stage 2 handoff/status check
+  reservation.py Reservation detail collection
+  rag_chain.py   Intent routing, RAG answers, and dynamic lookups
+  ...            PDF ingestion, vector store, metadata, and PII guardrails
+data/
+  pdfs/          Knowledge-base PDFs
+  ingest.py      PDF to chunks, metadata DB, and vector DB
+tests/           Offline tests for chatbot, admin agent, API, and Stage 1
 ```
 
 ## Setup
 
-```bash
-python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
+Requires Python 3.11+, an OpenAI API key for the LangChain agents and RAG,
+and optionally Docker if you want to run Milvus. From PowerShell:
+
+```powershell
+py -3.11 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
 python -m spacy download en_core_web_sm
-
-cp .env.example .env   # then edit .env and set OPENAI_API_KEY
+Copy-Item .env.example .env
 ```
 
-Optional — start a real Milvus instance (otherwise the app automatically
-falls back to a local Chroma store, no Docker required):
+Set `OPENAI_API_KEY` in `.env`. The default admin notification channel is
+`console`, which requires no additional setup. Set `ADMIN_DB_PATH` to the
+same SQLite file for the chatbot and Admin API processes; the default is
+`data/admin_requests.db`.
 
-```bash
-docker compose up -d
-```
+Optional notification configuration in `.env`:
 
-## Run
+| Channel | Setting | Additional settings |
+|---|---|---|
+| Console (default) | `ADMIN_NOTIFICATION_CHANNEL=console` | None |
+| Email | `ADMIN_NOTIFICATION_CHANNEL=email` | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `ADMIN_EMAIL` |
+| Slack | `ADMIN_NOTIFICATION_CHANNEL=slack` | `SLACK_WEBHOOK_URL` |
+| External REST | `ADMIN_NOTIFICATION_CHANNEL=rest` | `ADMIN_REST_ENDPOINT`, optional `ADMIN_REST_API_KEY` |
 
-```bash
-# 1. Create demo PDFs for the knowledge base (or drop your own files into data/pdfs/)
+Set `ADMIN_API_KEY` to protect Admin API POST routes. When it is set, provide
+the same value in the `x-api-key` header. If unset, API key verification is
+disabled, which is intended only for local development.
+
+## Run the Chatbot
+
+Generate sample knowledge-base PDFs or add your own PDFs under `data/pdfs/`,
+then ingest and start the chatbot:
+
+```powershell
 python -m data.generate_sample_pdfs
-
-# 2. Ingest: PDF → semantic chunks → metadata DB → vector DB
 python -m data.ingest
-
-# 3. Chat
 python main.py
 ```
 
-Verify ingestion worked:
+Ask to make a reservation and provide the requested details. The bot responds
+with a request ID once the request has been sent. Ask to check your
+reservation status to see whether it is pending, approved, or refused.
 
-```bash
-python -c "
-from src.metadata_store import list_documents, list_chunks
-print(len(list_documents()), 'documents,', len(list_chunks()), 'chunks')
-"
+Milvus is optional. If it is not running, the vector store can fall back to
+Chroma. To start the Docker Compose services, including Milvus and the Admin
+API, run `docker compose up -d` after creating `.env`.
+
+## Administrator Approval
+
+### LangChain Admin CLI
+
+Run the interactive admin agent in a separate terminal. It uses LangChain
+tools to list, approve, refuse, and check the status of requests in the shared
+SQLite store:
+
+```powershell
+python -m admin_agent.cli
 ```
 
-## Evaluate
+Example prompts:
 
-```bash
-# Auto-generate real test questions from the ingested PDFs
+```text
+list pending requests
+approve request <request-id> because a space is available
+refuse request <request-id> because the lot is full
+check status of request <request-id>
+```
+
+### Admin REST API
+
+Start the API when running it outside Docker:
+
+```powershell
+uvicorn admin_agent.api:app --host 127.0.0.1 --port 8001
+```
+
+Interactive API documentation is available at `http://localhost:8001/docs`.
+The chatbot itself escalates through the shared request store; the API is an
+alternative interface for creating, viewing, and deciding requests.
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| `POST` | `/reservations` | Create and notify about a reservation request |
+| `GET` | `/reservations` | List requests; optionally filter with `?status=pending` |
+| `GET` | `/reservations/{request_id}` | Read one request and its current status |
+| `POST` | `/reservations/{request_id}/decision` | Approve or refuse a request |
+
+Example: submit a decision from PowerShell (include the API key header if
+`ADMIN_API_KEY` is configured):
+
+```powershell
+$headers = @{ "x-api-key" = "your-admin-api-key" }
+$body = @{ approved = $true; reason = "Space available" } | ConvertTo-Json
+Invoke-RestMethod -Method Post `
+  -Uri "http://localhost:8001/reservations/<request-id>/decision" `
+  -Headers $headers -ContentType "application/json" -Body $body
+```
+
+## Tests
+
+The tests use fake LLMs, temporary SQLite databases, and mocked collaborators;
+they do not require live API credentials or network services:
+
+```powershell
+pytest -v
+```
+
+## Evaluation
+
+Generate questions from ingested PDFs and evaluate retrieval and answer
+quality:
+
+```powershell
 python -m evaluation.generate_qa_from_pdfs --per-chunk 2
-
-# Run retrieval + answer-correctness evaluation against those questions
 python -m evaluation.evaluate --grader llm
-# -> evaluation/REPORT.md, evaluation/eval_results.json
 ```
 
-`REPORT.md` contains Recall@K, Precision@K, retrieval latency (mean/P50/P95),
-and LLM-judged answer accuracy with failed-case details — this is the
-system performance evaluation report.
+The report is written to `evaluation/REPORT.md`, with detailed results in
+`evaluation/eval_results.json`.
 
-## Test
+## Docker and Infrastructure
 
-```bash
-pytest -v   # fully offline, no API key required
-```
+Build and run the chatbot container:
 
-## Docker
-
-```bash
+```powershell
 docker build -t parking-chatbot .
 docker run --rm -it --env-file .env parking-chatbot
 ```
 
-## CI/CD
+Docker Compose also defines the Milvus stack and the Admin API on port 8001:
 
-GitHub Actions (`.github/workflows/ci.yml`) runs on every push/PR:
-lint (flake8) → pytest with coverage (fully offline, no API key required) → Docker build.
-
-## Infrastructure as Code
-
-`terraform/` provisions Milvus (+ etcd/minio) and, optionally, the chatbot
-app container via the Docker Terraform provider — see `terraform/README.md`.
-
-```bash
-cd terraform
-terraform init
-terraform apply -var="openai_api_key=sk-..." -var="deploy_app_container=true"
+```powershell
+docker compose up -d
 ```
 
-## Presentation
+Terraform files for Milvus and optional app deployment are in `terraform/`;
+see [terraform/README.md](terraform/README.md) for details.
 
-```bash
-pip install -r docs/requirements-docs.txt
-python -m docs.generate_presentation
-# -> docs/Parking_Chatbot_Stage1.pptx (insert screenshots into the marked slides)
-```
+## Stage 1 Components Retained
 
-## Test coverage
-
-Every module has ≥2 pytest tests, all fully offline (fake LLMs/embeddings,
-tmp SQLite DBs, mocked collaborators — no network or API key required):
-
-| Module | Tests |
-|---|---|
-| `src/config.py` | 2 |
-| `src/sql_db.py` | 4 |
-| `src/vector_store.py` | 3 |
-| `src/pdf_loader.py` | 2 |
-| `src/semantic_chunker.py` | 2 |
-| `src/metadata_store.py` | 2 |
-| `src/reservation.py` | 3 |
-| `src/rag_chain.py` | 2 |
-| `src/chatbot.py` | 4 |
-| `src/guardrails/pii_filter.py` | 3 |
-| `data/ingest.py` | 2 |
-
-## Design notes
-
-- **PDF knowledge base**: `data/pdfs/*.pdf` → page-level load → merged
-  full-document text → `SemanticChunker` splits on embedding-distance
-  "meaning shifts" between sentences (not a fixed character window), with
-  automatic fallback to `RecursiveCharacterTextSplitter` if unavailable or
-  it errors at runtime.
-- **Metadata DB**: every chunk and its parent document are persisted in
-  SQLite (`data/metadata.db`) with file hash, page, chunk index, splitter
-  used, and full text — auditable and queryable independently of the
-  vector DB. The vector store is always rebuilt from this DB, so the two
-  can't drift apart.
-- **Resilience**: vector backend falls back Milvus → Chroma; PII filter
-  falls back Presidio → regex; chunker falls back semantic → recursive.
-  The bot degrades instead of crashing.
-- **Guardrails**: inbound scan blocks unsafe pastes (credit card/SSN/IBAN)
-  outside the reservation flow; outbound redaction is applied to
-  RAG-generated answers as defense-in-depth, but not to the reservation
-  summary (the user's own data being echoed back).
-- **Evaluation**: test questions are generated by an LLM directly from
-  real ingested chunks (`evaluation/generate_qa_from_pdfs.py`), so ground
-  truth (relevant chunk id + reference answer) is guaranteed to exist in
-  the knowledge base. `evaluation/evaluate.py` then reports Recall@K,
-  Precision@K, retrieval latency, and LLM-judged answer accuracy.
-
-## Troubleshooting
-
-| Symptom | Likely cause | Fix |
-|---|---|---|
-| `pytest` fails before anything else | broken install | re-check `pip install -r requirements.txt`, confirm `en_core_web_sm` downloaded |
-| `AuthenticationError` during ingest/chat | bad/missing `OPENAI_API_KEY` | check `.env` is loaded (run commands from repo root) |
-| `FileNotFoundError: No PDFs found` | skipped PDF generation | run `python -m data.generate_sample_pdfs` |
-| Bot answers "I don't know" to everything | ingestion didn't run / vector store empty | re-run `python -m data.ingest`, verify with the metadata DB check above |
-| `[vector_store] Milvus unavailable...` always shows | Milvus not running | expected if you haven't run `docker compose up -d` — this is the designed fallback |
-
-## Next stages (same repo, future folders)
-
-- Stage 2: `admin_agent/` — human-in-the-loop approval agent.
-- Stage 3: `mcp_server/` — writes approved reservations to file.
-- Stage 4: `graph/` — LangGraph orchestration + load/integration tests + docs.
+The administrator approval workflow builds on the original RAG chatbot:
+PDF knowledge is semantically chunked and indexed for retrieval, document
+metadata is persisted in SQLite, dynamic parking data is stored separately,
+and PII guardrails protect chat input and output. See `src/`, `data/`, and
+`evaluation/` for these components.
