@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+.env
+.venv/
+venv/
+.chroma_store/
+data/parking_dynamic.db
+data/metadata.db
+data/pdfs/*.pdf
+!data/pdfs/.gitkeep
+volumes/
+evaluation/eval_results.json
+evaluation/REPORT.md
+evaluation/generated_eval_dataset.json
+.pytest_cache/
