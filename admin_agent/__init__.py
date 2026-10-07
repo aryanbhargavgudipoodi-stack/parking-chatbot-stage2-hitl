@@ -1,1 +1,1 @@
-undefined
+"""Admin agent package."""
