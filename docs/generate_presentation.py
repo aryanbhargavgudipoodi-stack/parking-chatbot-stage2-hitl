@@ -1,7 +1,7 @@
 """
-Generates docs/Parking_Chatbot_Stage1.pptx — a presentation explaining the
-Stage 1 solution. Insert your own screenshots into the placeholder slides
-after generating it.
+Generates docs/Parking_Chatbot_Stage2.pptx — a presentation explaining the
+RAG chatbot and human-in-the-loop administrator approval workflow. Insert
+your own screenshots into the placeholder slides after generating it.
 
 Usage:
     pip install -r docs/requirements-docs.txt
@@ -10,7 +10,7 @@ Usage:
 from pptx import Presentation
 from pptx.util import Inches, Pt
 
-OUTPUT_PATH = "docs/Parking_Chatbot_Stage1.pptx"
+OUTPUT_PATH = "docs/Parking_Chatbot_Stage2.pptx"
 
 
 def _add_title_slide(prs, title, subtitle):
@@ -40,14 +40,14 @@ def _add_screenshot_placeholder_slide(prs, title, note):
 def build():
     prs = Presentation()
 
-    _add_title_slide(prs, "Parking Reservation Chatbot — Stage 1",
-                      "RAG chatbot, vector DB, guardrails, and evaluation")
+    _add_title_slide(prs, "Parking Reservation Chatbot — Stage 2",
+                      "RAG assistant with human-in-the-loop reservation approval")
 
     _add_bullet_slide(prs, "Problem & Scope", [
         "Chatbot answers parking questions: info, hours, prices, availability, location",
-        "Collects reservation details conversationally: name, surname, car number, period",
-        "Must not leak sensitive data",
-        "Performance must be measured (latency, retrieval accuracy)",
+        "Collects reservation details and escalates complete requests to an administrator",
+        "Administrator can approve or refuse; the user can ask the bot for the decision",
+        "Protect personal information and measure retrieval and answer quality",
     ])
 
     _add_bullet_slide(prs, "Architecture Overview", [
@@ -56,13 +56,38 @@ def build():
         "Chunks + document metadata persisted in SQLite (source of truth)",
         "Chunks embedded into vector DB (Milvus, auto-fallback to Chroma)",
         "Dynamic data (hours/prices/availability) served from a separate SQL table",
+        "AdminAgent and chatbot coordinate request state through a shared SQLite store",
     ])
 
     _add_bullet_slide(prs, "RAG & Conversation Flow", [
         "Intent classifier routes each message: static_info / dynamic_info / reservation / other",
         "static_info -> vector similarity search -> grounded LLM answer",
         "dynamic_info -> SQL lookup -> grounded LLM answer",
-        "reservation -> slot-filling agent collects name, surname, car number, period",
+        "reservation -> collect name, car number, period, and optional parking lot",
+        "completed details -> create pending request, notify admin, return request id",
+        "status_check -> read admin decision from shared request store and reply to user",
+    ])
+
+    _add_bullet_slide(prs, "Stage 2 — Administrator Agent", [
+        "LangChain tool-calling agent helps the administrator manage reservations",
+        "Tools list pending requests, approve, refuse with a reason, and check status",
+        "Request records store details, status, decision reason, and timestamps in SQLite",
+        "A unique request id connects the user conversation to the administrator decision",
+    ])
+
+    _add_bullet_slide(prs, "Escalation & Communication", [
+        "Chatbot creates the request only after reservation slot-filling is complete",
+        "AdminAgent composes a concise request summary and dispatches a notification",
+        "Channels: console, SMTP email, Slack webhook, or external REST endpoint",
+        "Notification alerts the admin; approval/refusal is recorded via the CLI or Admin API",
+        "Both agents read and update the same configurable SQLite request database",
+    ])
+
+    _add_bullet_slide(prs, "Administrator Decision Interfaces", [
+        "Natural-language CLI: 'list pending requests', 'approve request <id>', or refuse with a reason",
+        "FastAPI endpoints create, list, retrieve, and decide reservation requests",
+        "Optional ADMIN_API_KEY protects API write operations with the x-api-key header",
+        "The chatbot reads pending/approved/refused status and relays the decision to the user",
     ])
 
     _add_bullet_slide(prs, "Guardrails (PII Protection)", [
@@ -84,6 +109,10 @@ def build():
         "Chat screenshot: 'Where is the airport parking located?' and the bot's grounded answer.")
     _add_screenshot_placeholder_slide(prs, "Demo — Reservation Flow",
         "Chat screenshot: bot collecting name, surname, car number, and reservation period.")
+    _add_screenshot_placeholder_slide(prs, "Demo — Admin Approval Handoff",
+        "Show the chatbot's request id and the matching pending request in the admin CLI/API or notification.")
+    _add_screenshot_placeholder_slide(prs, "Demo — Decision Returned to User",
+        "Show the administrator approving or refusing a request, then the chatbot reporting its status and reason.")
     _add_screenshot_placeholder_slide(prs, "Demo — Guardrail Blocking Sensitive Input",
         "Screenshot: bot refusing a message with a pasted credit card number.")
     _add_screenshot_placeholder_slide(prs, "Evaluation Report",
@@ -95,8 +124,8 @@ def build():
         "Terraform (kreuzwerker/docker provider) to provision Milvus + app as code",
     ])
 
-    _add_bullet_slide(prs, "Next Steps (Stages 2-4)", [
-        "Stage 2: human-in-the-loop admin approval agent",
+    _add_bullet_slide(prs, "Current Stage & Next Steps", [
+        "Stage 2 delivered: chatbot-to-admin escalation, notifications, decisions, and user status checks",
         "Stage 3: MCP server / tool call to record approved reservations to file",
         "Stage 4: LangGraph orchestration end-to-end, load + integration tests, docs",
     ])
